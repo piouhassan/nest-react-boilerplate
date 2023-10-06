@@ -1,0 +1,98 @@
+version: "3.9"
+services:
+
+  mongodb:
+    image: mongo:4.4.2
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "27018:${DB_PORT}"
+    volumes:
+      - $HOME/db:/data/db
+    environment:
+      - "DB_HOST:${DB_HOST}"
+      - "DB_NAME:${DBNAME}"
+      - "DB_PORT:${DB_PORT}"
+    networks:
+      - boiler
+
+
+  traefik:
+    container_name: traefik
+    restart: unless-stopped
+    image: traefik
+    depends_on:
+      - mongodb
+      - api
+      - client
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=kiako
+    ports:
+      - "80:80"
+      - "8080:8080"
+    labels:
+      - traefik.http.services.traefik.loadbalancer.server.port=8080
+      - traefik.http.routers.traefik.rule=Host(`traefik.localhost`)
+      - traefik.http.middlewares.sslheader.headers.customrequestheaders.X-Forwarded-Proto = https
+      - traefik.enable=true
+      - traefik.http.services.traefik.loadbalancer.sticky=true
+      - traefik.http.services.traefik.loadbalancer.sticky.cookie.name=StickyCookie
+      - traefik.http.services.traefik.loadbalancer.sticky.cookie.secure=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - boiler
+
+
+  client:
+    container_name: client
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    restart: always
+    env_file: .env
+    ports:
+      - "${CLIENT_PORT}:${CLIENT_PORT}"
+    volumes:
+      - "./client:/react_app"
+      - ./client/node_modules:/react_app/node_modules
+    labels:
+      - "traefik.http.services.client.loadbalancer.server.port=${CLIENT_PORT}"
+      - "traefik.http.routers.client.rule=Host(${DOMAIN_CLIENT})"
+      - traefik.enable=true
+    networks:
+      - boiler
+    command: "npm run start"
+
+  api:
+    container_name: api
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: always
+    env_file: .env
+    volumes:
+      - ./server/src:/svr/app/src
+      - ./server/node_modules:/svr/app/node_modules
+    labels:
+      - traefik.http.services.api.loadbalancer.server.port=5000
+      - "traefik.http.routers.api.rule=Host(${DOMAIN_SERVER})"
+      - traefik.enable=true
+    networks:
+      - boiler
+    ports:
+      - "${BACKEND_PORT}:${BACKEND_PORT}"
+    depends_on:
+      - mongodb
+      - client
+    command: "npm run start"
+
+
+
+networks:
+  boiler:
+    driver: bridge
